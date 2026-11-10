@@ -4,104 +4,269 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MirrorCall</title>
+<title>MirrorCall ❤️</title>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <style>
 * { box-sizing: border-box; }
 body {
   margin: 0;
+  padding: 24px 16px;
   background: #10131b;
   color: white;
   font-family: Arial, sans-serif;
   text-align: center;
-  padding: 28px 18px;
 }
-h1 { color: #ff83a6; font-size: 34px; }
-p { color: #b9c0ce; }
+h1 { color: #ff83a6; }
+p { color: #c2c7d2; }
+.panel {
+  max-width: 440px;
+  margin: 18px auto;
+  padding: 16px;
+  background: #1b202c;
+  border-radius: 18px;
+}
 video, canvas {
   width: 100%;
-  max-width: 440px;
-  border-radius: 18px;
-  background: #242936;
-  margin-top: 18px;
+  border-radius: 14px;
+  background: #080a10;
 }
+video { margin-top: 12px; }
 button {
   border: 0;
   border-radius: 12px;
-  padding: 14px 22px;
-  margin: 10px 4px;
-  font-size: 16px;
+  padding: 13px 16px;
+  margin: 6px 3px;
   background: #ff83a6;
   color: #17121a;
   font-weight: bold;
+  font-size: 15px;
 }
-#status { margin-top: 18px; }
+input {
+  width: 100%;
+  padding: 13px;
+  border-radius: 10px;
+  border: 1px solid #555;
+  background: #10131b;
+  color: white;
+  margin: 8px 0;
+  font-size: 16px;
+}
+#status { color: #ffb5cb; }
+#myId {
+  overflow-wrap: anywhere;
+  color: #ffb5cb;
+  font-weight: bold;
+}
+.small { font-size: 12px; color: #929aaa; }
 </style>
 </head>
 <body>
 
 <h1>MirrorCall ❤️</h1>
-<p>A little video calling project for two people.</p>
+<p>A little place for two people.</p>
 
-<video id="camera" autoplay playsinline muted hidden></video>
-<canvas id="screen" width="640" height="480"></canvas>
-
-<div>
+<div class="panel">
+  <h3>Your camera</h3>
+  <canvas id="screen" width="640" height="480"></canvas>
+  <video id="camera" autoplay playsinline muted
+    style="position:fixed;left:-10000px;width:1px"></video>
+  <br>
   <button id="start">Start Camera</button>
   <button id="flip">Flip Mirror</button>
 </div>
 
-<p id="status">Camera not started yet.</p>
+<div class="panel">
+  <h3>Your connection ID</h3>
+  <p id="myId">Waiting for camera...</p>
+  <button id="copy">Copy My ID</button>
+  <p class="small">Share this ID privately with Yuki.</p>
+</div>
+
+<div class="panel">
+  <h3>Call Yuki</h3>
+  <input id="remoteId" placeholder="Enter Yuki's ID">
+  <button id="call">Start Video Call</button>
+  <p id="status">Not connected.</p>
+</div>
+
+<div class="panel">
+  <h3>Yuki's camera</h3>
+  <video id="remote" autoplay playsinline></video>
+  <br>
+  <button id="end">End Call</button>
+</div>
 
 <script>
 const camera = document.getElementById("camera");
-const screen = document.getElementById("screen");
-const ctx = screen.getContext("2d");
+const canvas = document.getElementById("screen");
+const ctx = canvas.getContext("2d");
+const remote = document.getElementById("remote");
 const status = document.getElementById("status");
+const myId = document.getElementById("myId");
 
-let stream;
+let localStream;
+let outgoingStream;
+let peer;
+let currentCall;
 let mirrored = true;
+let drawing = false;
+
+function drawFrame() {
+  if (!drawing) return;
+
+  if (camera.readyState >= 2) {
+    ctx.save();
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (mirrored) {
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+    }
+
+    ctx.drawImage(camera, 0, 0, canvas.width, canvas.height);
+    ctx.restore();
+  }
+
+  requestAnimationFrame(drawFrame);
+}
+
+function showRemote(stream) {
+  remote.srcObject = stream;
+  remote.play().catch(() => {
+    status.textContent = "Tap Yuki's video to enable playback.";
+  });
+}
+
+function setupPeer() {
+  peer = new Peer();
+
+  peer.on("open", id => {
+    myId.textContent = id;
+    status.textContent = "Ready to call! ❤️";
+  });
+
+  peer.on("call", call => {
+    if (!outgoingStream) {
+      call.close();
+      return;
+    }
+
+    currentCall = call;
+    call.answer(outgoingStream);
+    call.on("stream", showRemote);
+    call.on("close", () => {
+      remote.srcObject = null;
+      status.textContent = "Call ended.";
+    });
+  });
+
+  peer.on("error", error => {
+    status.textContent = "Connection error: " + error.type;
+  });
+}
 
 document.getElementById("start").onclick = async () => {
+  if (localStream) return;
+
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
+    status.textContent = "Starting camera...";
+
+    localStream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: "user" },
       audio: true
     });
 
-    camera.srcObject = stream;
+    camera.srcObject = localStream;
     await camera.play();
 
-    status.textContent = "Camera connected! ❤️";
+    canvas.width = camera.videoWidth || 640;
+    canvas.height = camera.videoHeight || 480;
+
+    outgoingStream = canvas.captureStream(24);
+
+    localStream.getAudioTracks().forEach(track => {
+      outgoingStream.addTrack(track);
+    });
+
+    drawing = true;
     drawFrame();
+    setupPeer();
+
+    status.textContent = "Camera ready. Connecting...";
   } catch (error) {
     status.textContent = "Camera error: " + error.message;
   }
 };
 
-function drawFrame() {
-  if (!stream) return;
-
-  ctx.save();
-  ctx.clearRect(0, 0, 640, 480);
-
-  if (mirrored) {
-    ctx.translate(640, 0);
-    ctx.scale(-1, 1);
-  }
-
-  ctx.drawImage(camera, 0, 0, 640, 480);
-  ctx.restore();
-
-  requestAnimationFrame(drawFrame);
-}
-
 document.getElementById("flip").onclick = () => {
   mirrored = !mirrored;
-  status.textContent = mirrored
-    ? "Mirror mode ON ❤️"
-    : "Mirror mode OFF";
+  status.textContent = mirrored ? "Mirror ON ❤️" : "Mirror OFF";
 };
-</script>
 
+document.getElementById("call").onclick = () => {
+  const id = document.getElementById("remoteId").value.trim();
+
+  if (!peer || !outgoingStream) {
+    status.textContent = "Start your camera first.";
+    return;
+  }
+
+  if (!id) {
+    status.textContent = "Enter Yuki's connection ID.";
+    return;
+  }
+
+  if (id === peer.id) {
+    status.textContent = "You cannot call your own ID.";
+    return;
+  }
+
+  status.textContent = "Calling...";
+
+  currentCall = peer.call(id, outgoingStream);
+
+  if (!currentCall) {
+    status.textContent = "Could not start call.";
+    return;
+  }
+
+  currentCall.on("stream", showRemote);
+
+  currentCall.on("close", () => {
+    remote.srcObject = null;
+    status.textContent = "Call ended.";
+  });
+
+  currentCall.on("error", error => {
+    status.textContent = "Call error: " + error.message;
+  });
+};
+
+document.getElementById("copy").onclick = async () => {
+  if (!peer || !peer.id) return;
+
+  try {
+    await navigator.clipboard.writeText(peer.id);
+    status.textContent = "Your ID copied!";
+  } catch {
+    status.textContent = "Please copy your ID manually.";
+  }
+};
+
+document.getElementById("end").onclick = () => {
+  if (currentCall) currentCall.close();
+  remote.srcObject = null;
+  status.textContent = "Call ended.";
+};
+
+window.addEventListener("pagehide", () => {
+  drawing = false;
+  if (currentCall) currentCall.close();
+  if (peer) peer.destroy();
+  if (localStream) {
+    localStream.getTracks().forEach(track => track.stop());
+  }
+});
+</script>
 </body>
 </html>
